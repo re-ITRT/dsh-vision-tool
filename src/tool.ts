@@ -103,7 +103,7 @@ export function defineVisionTool(deps: VisionToolDeps) {
       })
 
       // 当前 agent 的模型自带视觉能力 → 直接把图片挂进 agent 上下文，下一轮模型自己看像素
-      if (await callerHasNativeVision(deps.ctx, exec)) {
+      if (await callerHasNativeVision(deps.ctx, exec.agent, exec.signal)) {
         exec.deferContext(createUserMessage({
           source: { kind: 'plugin', plugin: 'dsh-vision-tool' },
           content: [
@@ -170,12 +170,19 @@ export function defineVisionTool(deps: VisionToolDeps) {
   })
 }
 
-/** 当前 agent 模型是否声明了 image 输入模态。 */
-async function callerHasNativeVision(ctx: Context, exec: ToolRunContext): Promise<boolean> {
-  const options = exec.agent?.options
+/**
+ * 当前 agent 模型是否声明了 image 输入模态。拦截器与工具执行共用：
+ * 有原生视觉 → 图片直接进上下文；没有 → 走辅助模型。
+ */
+export async function callerHasNativeVision(
+  ctx: Context,
+  agent: { options?: { provider?: string; model?: string } } | undefined,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const options = agent?.options
   if (!options?.provider || !options?.model) return false
   try {
-    const info = await ctx.llm.resolveModelInfo(options.provider, options.model, exec.signal)
+    const info = await ctx.llm.resolveModelInfo(options.provider, options.model, signal)
     return info.inputModalities?.includes('image') ?? false
   } catch {
     return false

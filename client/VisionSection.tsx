@@ -46,6 +46,7 @@ export function VisionSection(props: Props) {
   const [manualModel, setManualModel] = useState('')
 
   const data = snap.data
+  const enabled = data?.enabled === true
   const configured = data?.configured === true
   const currentProvider = data?.provider ?? ''
   const currentModel = data?.model ?? ''
@@ -121,18 +122,58 @@ export function VisionSection(props: Props) {
     })
   }
 
+  const toggleEnabled = () => {
+    if (!store || snap.saving) return
+    void store.setEnabled(!enabled).then((ok) => {
+      if (ok && !enabled) setOpen(false)
+    })
+  }
+
   const currentLabel = configured
     ? currentModel + '（' + currentProvider + '）'
     : '选择视觉模型…'
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 560 }}>
+      {/* 总开关 */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '10px 12px',
+          borderRadius: 8,
+          border: '1px solid var(--dsw-alias-border, rgba(128,128,128,0.25))',
+        }}
+      >
+        <StateDot state={enabled ? 'done' : 'warning'} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flex: 1 }}>
+          <span style={{ fontSize: 14, fontWeight: 600 }}>视觉辅助（Vision assist）</span>
+          <span style={{ fontSize: 12, opacity: 0.75 }}>
+            {enabled
+              ? '已开启：消息里的图片会交给视觉模型描述后进入上下文；agent 也可用 vision_analyze 自行查看图片。'
+              : '已关闭：与未安装插件时完全一致（无视觉功能的模型收到图片会提示无视觉功能）。'}
+          </span>
+        </div>
+        <Button
+          variant={enabled ? 'primary' : 'outline'}
+          size="sm"
+          disabled={snap.saving || snap.status !== 'ready'}
+          onClick={toggleEnabled}
+        >
+          {snap.saving ? '保存中…' : enabled ? '开启中' : '未开启'}
+        </Button>
+      </div>
+
+      {/* 状态行 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <StateDot state={configured ? 'done' : 'warning'} />
         <span>
           {configured
-            ? '👁️ vision_analyze 已启用：agent 可以调用该工具查看图片。'
-            : '👁️ vision_analyze 未配置：选择视觉模型后，工具才会出现在 agent 上下文。'}
+            ? '👁️ vision_analyze 已启用：agent 可以调用该工具查看图片，消息图片也会自动转成描述。'
+            : enabled
+              ? '👁️ vision_analyze 待配置：请选择视觉模型，工具才会出现在 agent 上下文。'
+              : '👁️ vision_analyze 未配置：开启开关并选择视觉模型后生效。'}
         </span>
       </div>
 

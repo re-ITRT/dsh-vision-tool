@@ -31,6 +31,7 @@ const visionCatalogFailureSchema = z.object({
 })
 
 export const visionDescribeResultSchema = z.object({
+  enabled: z.boolean(),
   provider: z.string(),
   model: z.string(),
   configured: z.boolean(),
@@ -39,8 +40,20 @@ export const visionDescribeResultSchema = z.object({
 })
 
 export const visionSaveRequestSchema = z.object({
-  provider: z.string(),
-  model: z.string(),
+  enabled: z.boolean().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+})
+
+export const visionImagePartSchema = z.object({
+  mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp', 'image/gif']),
+  data: z.string(),
+  name: z.string().optional(),
+})
+
+export const visionTransformResultSchema = z.object({
+  enabled: z.boolean(),
+  descriptions: z.array(z.string()),
 })
 
 export const TYPERT = {
@@ -90,6 +103,31 @@ export const TYPERT = {
         mode: 'strict' as const,
         typeSymbol: 'dsh-vision-tool#vision/save:result',
         schema: visionDescribeResultSchema,
+      },
+    },
+    {
+      id: 'dsh-vision-tool#vision/transformImages',
+      service: 'vision',
+      namespace: 'vision',
+      method: 'transformImages',
+      invocation: { kind: 'direct' as const },
+      parameters: [
+        {
+          name: 'request',
+          wire: 'request',
+          source: 'json' as const,
+          codec: {
+            mode: 'strict' as const,
+            typeSymbol: 'dsh-vision-tool#vision/transformImages:request',
+            schema: z.object({ images: z.array(visionImagePartSchema) }),
+          },
+        },
+      ],
+      cancellation: { parameter: 'signal' as const },
+      result: {
+        mode: 'strict' as const,
+        typeSymbol: 'dsh-vision-tool#vision/transformImages:result',
+        schema: visionTransformResultSchema,
       },
     },
   ],

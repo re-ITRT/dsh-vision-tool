@@ -9,6 +9,13 @@ import type { Config } from './config.js'
  * 视觉页只做选择 —— 和官方「模型」页的配置方式一致。
  */
 export interface VisionSettings {
+  /**
+   * 视觉辅助总开关。关闭时插件整体失效，行为与未安装插件完全一致
+   * （无视觉模型收到图片会走 DSH 默认的「该模型无视觉功能」拒绝）。
+   * 开启后：无视觉主模型的消息图片会在 pre-step 被自动转成视觉模型的
+   * 文字描述；vision_analyze 工具注册，agent 可自行决定调用。
+   */
+  enabled: boolean
   /** 视觉提供方路由 id（如 opencode-go / deepseek-official）。 */
   provider: string
   /** 视觉模型 id（如 qwen-vl-max / gpt-4o-mini）。 */
@@ -16,6 +23,7 @@ export interface VisionSettings {
 }
 
 export const VisionSettingsSchema: Schema<VisionSettings> = Schema.object({
+  enabled: Schema.boolean().default(false),
   provider: Schema.string().default(''),
   model: Schema.string().default(''),
 })
@@ -28,11 +36,12 @@ export function visionNamespace(config: Config) {
 }
 
 /**
- * 判定「已配置」：provider 与 model 都已选择。
- * 只有已配置时 vision_analyze 才会注册进工具注册表，否则 agent 上下文里看不到它。
+ * 判定「已配置」：总开关开启 且 provider 与 model 都已选择。
+ * 只有已配置时 vision_analyze 才会注册进工具注册表（以及 pre-step 图片拦截
+ * 才会挂载），否则 agent 上下文里看不到它、消息图片也走 DSH 默认行为。
  */
 export function isVisionConfigured(settings: VisionSettings): boolean {
-  return Boolean(settings.provider.trim() && settings.model.trim())
+  return settings.enabled && Boolean(settings.provider.trim() && settings.model.trim())
 }
 
 /**

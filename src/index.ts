@@ -1,5 +1,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Config } from './config.js'
+import { applyImageIntercept } from './intercept.js'
 import { VisionRemoteService } from './remote.js'
 import {
   VisionSettingsSchema,
@@ -27,6 +28,9 @@ const GUIDANCE_SECTION = [
   'an image URL in tool output, a browser screenshot, or a data URL. Provide the image plus',
   'a concrete question. Prefer calling it once per image; use the region parameter to zoom',
   'into small details instead of re-loading the whole image.',
+  '',
+  'Images the user attaches directly to a message are described for you by the vision model',
+  'before they reach your context, so you can answer image questions even without native vision.',
 ].join('\n')
 
 export function apply(ctx: Context, config: Config) {
@@ -39,12 +43,19 @@ export function apply(ctx: Context, config: Config) {
     },
   })
 
-  // 1b) 注册 Typert Remote 命名空间 'vision'（vision/describe、vision/save），
-  //     作为设置页的读写通道 —— 不占用模型页的提供方目录，模型页保持干净。
-  ctx.plugin(VisionRemoteService, { namespace: config.namespace ?? 'vision' })
+  // 1b) 注册 Typert Remote 命名空间 'vision'（vision/describe、vision/save、
+  //     vision/transformImages），作为设置页的读写通道 —— 不占用模型页的
+  //     提供方目录，模型页保持干净。
+  ctx.plugin(VisionRemoteService, {
+    namespace: config.namespace ?? 'vision',
+    ...(config.promptTemplate === undefined ? {} : { promptTemplate: config.promptTemplate }),
+    ...(config.systemPrompt === undefined ? {} : { systemPrompt: config.systemPrompt }),
+  })
 
-  // 2) 按「已配置」条件注册/卸载工具 —— 未配置模型时 agent 上下文里没有这个工具。
+  // 2) 按「已配置」条件注册/卸载工具与图片拦截 —— 未配置（开关关）时
+  //    agent 上下文里没有这个工具，消息图片也走 DSH 默认行为。
   let disposeTool: (() => void) | undefined
+  let disposeIntercept: (() => void) | undefined
 
   const refresh = (settings: VisionSettings) => {
     if (isVisionConfigured(settings)) {
@@ -52,15 +63,18 @@ export function apply(ctx: Context, config: Config) {
         disposeTool = ctx.tools.register(
           defineVisionTool({ ctx, config, getSettings: () => scope.get() }),
         )
+        disposeIntercept = applyImageIntercept({ ctx, config, getSettings: () => scope.get() })
         ctx.logger.info(
-          '[dsh-vision-tool] vision_analyze registered (' +
-            settings.provider.trim() + ' / ' + settings.model.trim() + ')',
+          '[dsh-vision-tool] vision assist enabled (' +
+            settings.provider.trim() + ' / ' + settings.model.trim() + '): tool + image intercept',
         )
       }
     } else if (disposeTool) {
       disposeTool()
       disposeTool = undefined
-      ctx.logger.info('[dsh-vision-tool] vision_analyze unregistered: no vision model selected')
+      disposeIntercept?.()
+      disposeIntercept = undefined
+      ctx.logger.info('[dsh-vision-tool] vision assist disabled: switch off or no vision model selected')
     }
   }
 
@@ -85,6 +99,8 @@ export function apply(ctx: Context, config: Config) {
     unwatch()
     disposeTool?.()
     disposeTool = undefined
+    disposeIntercept?.()
+    disposeIntercept = undefined
   })
 }
 

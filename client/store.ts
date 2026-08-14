@@ -38,6 +38,15 @@ export class VisionPageStore {
 
   /** 选择 provider+model，保存后重新加载。 */
   async select(provider: string, model: string): Promise<boolean> {
+    return this.save({ provider, model })
+  }
+
+  /** 切换视觉辅助总开关，保存后重新加载。 */
+  async setEnabled(enabled: boolean): Promise<boolean> {
+    return this.save({ enabled })
+  }
+
+  private async save(request: { enabled?: boolean; provider?: string; model?: string }): Promise<boolean> {
     if (!this.store.getSnapshot().saving) {
       this.store.update((s) => {
         s.saving = true
@@ -45,7 +54,7 @@ export class VisionPageStore {
       })
     }
     try {
-      const result = await this.remote.vision.save({ provider, model })
+      const result = await this.remote.vision.save(request)
       if (!result.ok) {
         this.store.update((s) => {
           s.saving = false
