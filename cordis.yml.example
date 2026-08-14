@@ -1,0 +1,19 @@
+# DeepSeek Harness 配置覆盖层（patch 文件），用来把本插件插入启动组合。
+# 用法（任选其一）：
+#
+# 开发模式（直接加载 TS 源码，配合 dsh-client-hmr 可热重载）：
+#   npx @deepseek-ai/dsh web --patch cordis.yml.example
+#   - insert:
+#     - id: vision
+#       name: <本仓库绝对路径>/dsh-vision-tool/src/index.ts
+#
+# 已安装模式（npm 包形式，先在本 profile 目录 npm i <本仓库路径>）：
+- insert:
+  - id: vision
+    name: dsh-vision-tool
+#    config:
+#      # 组合层默认值（设置页里仍然可以覆盖；provider 与 model 都不为空才算已配置）
+#      provider: opencode-go    # 默认视觉提供方路由（端点和密钥由「模型」页管理）
+#      model: qwen-vl-max       # 默认视觉模型 id
+#      namespace: vision        # 设置命名空间
+#      maxDimension: 1568       # 图像最长边，超过等比缩小（region 先裁剪）
