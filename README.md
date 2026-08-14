@@ -68,8 +68,11 @@ DeepSeek Harness 的视觉工具插件（Cordis 插件）：给 agent 增加 **�
 - **Typert Remote（`src/remote.ts`）**：`VisionRemoteService extends TypertRemoteService`，
   cordis 服务名 = 线上命名空间 = `vision`，两个 `@Remote` 方法构成端点
   `vision/describe`（当前选择 + 模型目录 + 每个模型的 vision 能力标记）与
-  `vision/save`（写入选择）。网关按 SRC（源反射）模式自动发现该服务 —— 无需生成器。
-  这是设置页唯一的数据通道，绕开了设置白名单，也因此不污染「模型」页。
+  `vision/save`（写入选择）。这是设置页唯一的数据通道，绕开了设置白名单，也因此不污染「模型」页。
+  **注意**：`@Remote` 装饰器把方法标记存在 `dsh-typert-protocol` 的模块私有状态里；
+  插件自带 node_modules 时与网关持有两份模块实例，SRC 源反射会读不到标记（404）。
+  因此 `src/typert.host.ts` 提供了严格路径清单（`exports["./typert"]`），
+  `dsh-typert-loader` 把它注册进 `ctx.typert.local`，网关走严格路径解析这两个端点。
 - **条件注册**：`scope.watch` 监听设置变化，provider+model 齐全才
   `ctx.tools.register(...)`，否则调用注册返回的 disposer 卸载工具（触发
   `tools/change`，提示词组装即时更新）。
@@ -172,6 +175,21 @@ dsh-vision-tool/
 ├── lib/                    # tsc 产物（宿主侧）
 └── dist/client.js          # esbuild 产物（客户端 bundle）
 \`\`\`
+
+## 实测验证（2026-08-14，DSH 0.1.0-rc.6）
+
+在 `dsh web`（profile 安装模式）上完整跑通：
+
+| 验证项 | 结果 |
+| --- | --- |
+| client bundle 注入 | `window.__DSH_BOOT__` 含 `dsh-vision-tool` row，`/plugins/dsh-vision-tool/client.js` 200 |
+| 设置页 | 设置 → 👁️ 视觉 / Vision 正常渲染，无 JS 错误 |
+| 模型下拉框 | 与右下角模型选择器同源：DeepSeek 官方 + opencode-go 全目录，带 👁️ 能力标记 |
+| 选择即保存 | 选中 qwen3.7-plus → `~/.dsh/settings.yaml` 写入 `vision: {provider, model}` |
+| 能力自动声明 | `llm-pi-ai.providers.opencode-go.modelOverrides.qwen3.7-plus.input: [text, image]` 自动落盘 |
+| 条件注册（正向） | 配置后新会话 agent 实际调用 `vision_analyze`（URL 输入，21s 完成，返回详细中文描述） |
+| 条件注册（反向） | 清空配置重启后，agent 明示工具列表里没有 vision_analyze、不具备图像能力 |
+| region 裁剪 | `[100,150,600,400]`→500x250 精确；越界坐标 clamp；退化区域正确报错 |
 
 ## 已知边界
 
