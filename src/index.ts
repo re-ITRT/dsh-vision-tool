@@ -24,14 +24,11 @@ export const inject = ['tools', 'settings', 'llm', 'attachments', 'systemPrompt'
 const GUIDANCE_SECTION = [
   '## ' + TOOLSET + ' toolset (' + TOOL_EMOJI + ' ' + TOOL_NAME + ')',
   '',
-  'Use ' + TOOL_NAME + ' whenever the user references an image: a filepath in their message,',
-  'an image URL in tool output, a browser screenshot, or a data URL. Provide the image plus',
-  'a concrete question. Prefer calling it once per image; use the region parameter to zoom',
-  'into small details instead of re-loading the whole image.',
-  '',
-  'Images the user attaches directly to a message appear as a short placeholder in your context',
-  'with an attachment://<id> reference — call ' + TOOL_NAME + ' with that reference to get the image',
-  'content into your context.',
+  'Images the user attaches to their messages are already in your context — you can see them directly.',
+  'Use ' + TOOL_NAME + ' when you need to inspect an image more closely: a filepath in their message,',
+  'an image URL in tool output, a browser screenshot, or an attachment://<id> reference from a user',
+  'message. Provide the image plus a concrete question. Prefer calling it once per image; use the',
+  'region parameter to zoom into small details instead of re-loading the whole image.',
 ].join('\n')
 
 export function apply(ctx: Context, config: Config) {
