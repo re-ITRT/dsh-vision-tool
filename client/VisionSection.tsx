@@ -151,7 +151,7 @@ export function VisionSection(props: Props) {
           <span style={{ fontSize: 14, fontWeight: 600 }}>视觉辅助（Vision assist）</span>
           <span style={{ fontSize: 12, opacity: 0.75 }}>
             {enabled
-              ? '已开启：消息里的图片会交给视觉模型描述后进入上下文；agent 也可用 vision_analyze 自行查看图片。'
+              ? '已开启：消息里的图片会以附件形式进入会话，agent 可通过 vision_analyze 工具自行查看图片内容；无原生视觉的主模型会自动放行图片消息（内容获取由 tool call 完成）。'
               : '已关闭：与未安装插件时完全一致（无视觉功能的模型收到图片会提示无视觉功能）。'}
           </span>
         </div>

@@ -2,9 +2,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { Config } from './config.js'
-import { loadImage } from './image.js'
+import { loadImage, processImage, type LoadedImage } from './image.js'
 import { DEFAULT_PROMPT_TEMPLATE } from './config.js'
 import { isVisionConfigured, type VisionSettings } from './settings.js'
+import { lookupAttachmentRef } from './attachments.js'
 
 /** 注册信息（与需求方给定的规格一致）。 */
 export const TOOL_NAME = 'vision_analyze'
@@ -22,14 +23,16 @@ export const TOOL_EMOJI = '👁️'
 
 /** 面向模型/agent 的工具描述（需求方给定的原文）。 */
 const TOOL_DESCRIPTION =
-  'Load an image into the conversation so you can see it. Accepts a URL, local file path, or data URL. ' +
-  "When your active model has native vision, the image is attached to your context directly and you read the " +
-  'pixels yourself on the next turn — call this any time the user references an image (filepath in their message, ' +
-  'URL in tool output, screenshot from the browser, etc.). For non-vision models, falls back to an auxiliary ' +
-  'vision model that returns a text description.'
+  'Load an image into the conversation so you can see it. Accepts a URL, local file path, data URL, ' +
+  'or attachment://<id> (an image attached to the user message in this session). ' +
+  'Call this any time the user references an image (filepath in their message, URL in tool output, ' +
+  'browser screenshot, attached image, etc.). Returns a text description of the image from the ' +
+  'configured vision model — use the question parameter to ask about specific details, and the ' +
+  'region parameter to zoom into small details instead of re-loading the whole image.'
 
 const IMAGE_URL_DESCRIPTION =
-  'Image URL (http/https), local file path, or data: URL to load.'
+  'Image source: http/https URL, local file path, data: URL, or attachment://<id> ' +
+  '(an image attached to the user message in this session).'
 const QUESTION_DESCRIPTION =
   'Your specific question or request about the image. Optional context the model uses on the next turn after seeing the image.'
 const REGION_DESCRIPTION =
@@ -87,42 +90,48 @@ export function defineVisionTool(deps: VisionToolDeps) {
         )
       }
 
-      const loaded = await loadImage(
-        args.image_url,
-        args.region,
-        exec.signal,
-        {
-          maxDimension: deps.config.maxDimension ?? 1568,
-          jpegQuality: deps.config.jpegQuality ?? 90,
-        },
-      )
+      // 输入解析：attachment://<id>（会话图片附件，id 形如 sha256:xxx）走附件注册表；其它走 URL/路径/data URL
+      const attachmentMatch = /^attachment:\/\/([A-Za-z0-9:_-]+)$/.exec(args.image_url.trim())
+      let loaded: LoadedImage
+      if (attachmentMatch) {
+        const ref = lookupAttachmentRef(attachmentMatch[1])
+        if (ref === undefined) {
+          throw new Error(
+            'vision_analyze: attachment "' + attachmentMatch[1] + '" is not available in this session ' +
+              '(进程重启后历史附件引用会失效 —— 请让用户重新上传图片)',
+          )
+        }
+        const stored = await deps.ctx.attachments.readImage(ref, exec.signal)
+        const processed = await processImage(
+          Buffer.from(stored.data),
+          ref.mediaType.replace('image/', ''),
+          args.region,
+          {
+            maxDimension: deps.config.maxDimension ?? 1568,
+            jpegQuality: deps.config.jpegQuality ?? 90,
+          },
+        )
+        loaded = { ...processed, name: ref.name }
+      } else {
+        loaded = await loadImage(
+          args.image_url,
+          args.region,
+          exec.signal,
+          {
+            maxDimension: deps.config.maxDimension ?? 1568,
+            jpegQuality: deps.config.jpegQuality ?? 90,
+          },
+        )
+      }
       const attachment = await deps.ctx.attachments.saveImage({
         data: loaded.data,
         mediaType: loaded.mediaType,
         name: loaded.name,
       })
 
-      // 当前 agent 的模型自带视觉能力 → 直接把图片挂进 agent 上下文，下一轮模型自己看像素
-      if (await callerHasNativeVision(deps.ctx, exec.agent, exec.signal)) {
-        exec.deferContext(createUserMessage({
-          source: { kind: 'plugin', plugin: 'dsh-vision-tool' },
-          content: [
-            { type: 'text', text: 'The image below was loaded for the question: ' + args.question },
-            { type: 'image', attachment },
-          ],
-        }))
-        return {
-          description:
-            'The image (' + loaded.width + 'x' + loaded.height + ') is now attached to your context. ' +
-            'On your next turn you can see it directly — read the pixels yourself and answer: ' + args.question,
-          question: args.question,
-          mode: 'attached',
-          width: loaded.width,
-          height: loaded.height,
-        }
-      }
-
-      // 无原生视觉 → 调用辅助视觉模型，把完整描述作为文本结果返回给 agent
+      // 统一走辅助视觉模型：返回文字描述作为工具结果，由 agent 决定如何使用。
+      // （tool call 架构：主模型不直接收图 —— pre-step 会把用户消息里的图片
+      // 替换成占位文本；工具的输出是描述文本，进 agent 上下文。）
       const prompt = buildPrompt(deps.config.promptTemplate ?? DEFAULT_PROMPT_TEMPLATE, args.question)
       const message = createUserMessage({
         source: { kind: 'plugin', plugin: 'dsh-vision-tool' },
@@ -168,25 +177,6 @@ export function defineVisionTool(deps: VisionToolDeps) {
       rawInput: { question: args.question, image_url: args.image_url },
     }),
   })
-}
-
-/**
- * 当前 agent 模型是否声明了 image 输入模态。拦截器与工具执行共用：
- * 有原生视觉 → 图片直接进上下文；没有 → 走辅助模型。
- */
-export async function callerHasNativeVision(
-  ctx: Context,
-  agent: { options?: { provider?: string; model?: string } } | undefined,
-  signal: AbortSignal,
-): Promise<boolean> {
-  const options = agent?.options
-  if (!options?.provider || !options?.model) return false
-  try {
-    const info = await ctx.llm.resolveModelInfo(options.provider, options.model, signal)
-    return info.inputModalities?.includes('image') ?? false
-  } catch {
-    return false
-  }
 }
 
 /** 替换 {question} 占位符；模板没有占位符时把问题追加到末尾。 */

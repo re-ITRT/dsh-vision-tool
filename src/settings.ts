@@ -31,6 +31,26 @@ export const VisionSettingsSchema: Schema<VisionSettings> = Schema.object({
 /** llm-pi-ai 适配器的设置命名空间：图片能力声明写进 providers.<provider>.modelOverrides。 */
 const PI_AI_NS = settingsNamespace('llm-pi-ai')
 
+/**
+ * 本插件为主模型写过图片声明的 (provider, model) 集合（模块级，进程内存）。
+ * 开关关闭时据此清理残留声明，避免主模型被永久误报为支持图片输入。
+ */
+const declaredMainModels = new Set<string>()
+
+/** 记录/清理主模型声明痕迹（供 ensureImageAdmission 与开关关闭时使用）。 */
+export function trackMainModelDeclaration(provider: string, model: string): void {
+  declaredMainModels.add(provider + '/' + model)
+}
+export function clearMainModelDeclarations(): void {
+  declaredMainModels.clear()
+}
+export function trackedMainModelDeclarations(): readonly [string, string][] {
+  return Array.from(declaredMainModels, (entry) => {
+    const slash = entry.indexOf('/')
+    return [entry.slice(0, slash), entry.slice(slash + 1)]
+  })
+}
+
 export function visionNamespace(config: Config) {
   return settingsNamespace(config.namespace ?? 'vision')
 }
@@ -110,4 +130,48 @@ export async function syncImageInputDeclaration(
   await ctx.settings.mutate(PI_AI_NS, ops).catch((error: unknown) => {
     ctx.logger.warn('[dsh-vision-tool] image-input declaration failed: ' + (error as Error).message)
   })
+}
+
+/**
+ * 给「主模型」写图片输入声明（会话图片放行用）：
+ * 无原生视觉的主模型要接收带图消息，apiproxy 在 prompt 入口会按
+ * resolveModelInfo 的 inputModalities 拒绝（MODEL_DOES_NOT_SUPPORT_IMAGES）。
+ * 对 pi-ai 目录路由，写 modelOverrides.input = ['text','image'] 即可让
+ * 门禁放行 —— 图片随后由 pre-step 拦截器替换成占位文本，实际发给主模型
+ * 的请求里并没有图，声明只是「能力门禁」层面的放行。
+ * 非 pi-ai 路由返回 false（保持 DSH 默认拒绝行为）。
+ */
+export async function declareImageInputForMainModel(
+  ctx: Context,
+  provider: string,
+  model: string,
+): Promise<boolean> {
+  const piAiEntry = ctx.llm.listConfigurableProviders().find(
+    (entry) => entry.settingsNs === 'llm-pi-ai' && entry.provider === provider,
+  )
+  if (piAiEntry === undefined || piAiEntry.declared !== false) return false
+  const ops: readonly SettingsPathOp[] = [
+    { op: 'set', path: ['providers', provider, 'modelOverrides', model, 'input'], value: ['text', 'image'] },
+  ]
+  try {
+    await ctx.settings.mutate(PI_AI_NS, ops)
+    trackMainModelDeclaration(provider, model)
+    return true
+  } catch (error) {
+    ctx.logger.warn('[dsh-vision-tool] main-model image declaration failed: ' + (error as Error).message)
+    return false
+  }
+}
+
+/** 撤销主模型图片声明（开关关闭时清理残留）。 */
+export async function undeclareMainModelImages(ctx: Context): Promise<void> {
+  for (const [provider, model] of trackedMainModelDeclarations()) {
+    const ops: readonly SettingsPathOp[] = [
+      { op: 'unset', path: ['providers', provider, 'modelOverrides', model, 'input'] },
+    ]
+    await ctx.settings.mutate(PI_AI_NS, ops).catch((error: unknown) => {
+      ctx.logger.warn('[dsh-vision-tool] failed to clear main-model image declaration: ' + (error as Error).message)
+    })
+  }
+  clearMainModelDeclarations()
 }

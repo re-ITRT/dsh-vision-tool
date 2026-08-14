@@ -2,8 +2,7 @@ import Schema from '@deepseek-ai/schemastery'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import { settingsNamespace, type SettingsProvider } from '@deepseek-ai/dsh-settings'
 import type { Context } from '@deepseek-ai/cordis'
-import { describeAttachments, type ImageInterceptDeps } from './intercept.js'
-import { isVisionConfigured, type VisionSettings } from './settings.js'
+import { isVisionConfigured, declareImageInputForMainModel, undeclareMainModelImages, type VisionSettings } from './settings.js'
 
 /** 视觉页下拉框里的一组模型（对应官方模型目录的 provider group）。 */
 export interface VisionCatalogModel {
@@ -44,18 +43,21 @@ export interface VisionSaveRequest {
   model?: string
 }
 
-/** transformImages 的输入：浏览器提交前的一张图片（base64 直传）。 */
-export interface VisionImagePart {
-  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
-  data: string
-  name?: string
+/** ensureImageAdmission 的输入：提交图片消息的会话。 */
+export interface VisionAdmissionRequest {
+  sessionId: string
 }
 
-/** transformImages 的返回值：开关状态 + 每张图的描述文字。 */
-export interface VisionTransformResult {
-  /** 视觉辅助是否开启；关闭时 descriptions 为空数组，调用方保持原样提交。 */
-  enabled: boolean
-  descriptions: string[]
+/** ensureImageAdmission 的返回值。 */
+export interface VisionAdmissionResult {
+  /**
+   * 视觉辅助已配置且主模型声明成功 → true：图片消息会被 apiproxy 放行，
+   * 由 pre-step 拦截器替换成占位文本，agent 通过 vision_analyze 查看。
+   * false：保持 DSH 默认行为（无视觉模型收到图片消息被拒绝，与原版一致）。
+   */
+  allowed: boolean
+  /** 是否实际为主模型写了图片声明（非 pi-ai 路由时为 false）。 */
+  patched: boolean
 }
 
 /** Remote 服务的插件配置：设置命名空间 + 提示词模板（供 transformImages 复用）。 */
@@ -166,51 +168,43 @@ export class VisionRemoteService extends TypertRemoteService {
       throw new Error('vision/save: provider and model must be non-empty')
     }
     await this.settings.update(this.ns, next)
+    // 关闭开关：撤销为主模型写过的图片声明，避免残留误报
+    if (!next.enabled) {
+      await undeclareMainModelImages(this.ctx).catch((error: unknown) => {
+        this.ctx.logger.warn('[dsh-vision-tool] failed to clear main-model declarations: ' + (error as Error).message)
+      })
+    }
     return this.describe(signal)
   }
 
   /**
-   * 提交前图片转换：浏览器把待发送的图片（base64）交给宿主，视觉辅助开启时
-   * 逐张用所选视觉模型生成文字描述。关闭时返回 enabled:false，调用方保持原样。
-   * 图片先落附件服务（与 read_image 同一持久化通道），描述复用拦截器逻辑。
+   * 提交前放行检查（用户直传图片路径）：
+   * 视觉辅助开启时，给当前会话的主模型写 pi-ai modelOverrides 图片声明，
+   * 让 apiproxy 的图片门禁放行 —— 图片以 image block 进入会话历史/UI，
+   * pre-step 拦截器再把它替换成占位文本，内容获取由 agent 调 vision_analyze
+   * 完成（tool call 架构，与 Hermes 一致）。
+   * 未配置（开关关）或主模型非 pi-ai 路由时返回 allowed:false，
+   * 调用方原样提交，行为与未安装插件一致（DSH 默认拒绝无视觉模型的图片）。
    */
   @Remote
-  async transformImages(request: { images: VisionImagePart[] }, signal: AbortSignal): Promise<VisionTransformResult> {
+  async ensureImageAdmission(request: VisionAdmissionRequest, signal: AbortSignal): Promise<VisionAdmissionResult> {
     const settings = this.resolve()
-    if (!isVisionConfigured(settings) || !Array.isArray(request?.images) || request.images.length === 0) {
-      return { enabled: false, descriptions: [] }
+    if (!isVisionConfigured(settings)) {
+      return { allowed: false, patched: false }
     }
-    const deps: ImageInterceptDeps = {
-      ctx: this.ctx,
-      config: {
-        ...(this.promptTemplate === undefined ? {} : { promptTemplate: this.promptTemplate }),
-        ...(this.systemPrompt === undefined ? {} : { systemPrompt: this.systemPrompt }),
-      },
-      getSettings: () => this.resolve(),
+    const sessionId = request?.sessionId
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      return { allowed: false, patched: false }
     }
-    const attachments = this.ctx.get('attachments')
-    if (attachments === undefined) {
-      throw new Error('vision/transformImages: attachment service unavailable')
+    const agents = this.ctx.get('agents')
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- branded SessionId 与 wire 字符串互转
+    const agent = agents?.get(sessionId as any)
+    const header = agent?.session?.requestHeader?.()
+    const selection = header?.config
+    if (!selection?.provider || !selection?.model) {
+      return { allowed: false, patched: false }
     }
-    try {
-      // saveImage 返回完整 ImageAttachmentRef（bytes/width/height 等），
-      // 必须原样传给描述调用 —— adapter 序列化 image block 时要读这些字段。
-      const refs = await Promise.all(request.images.map(async (part) => {
-        const data = Uint8Array.from(atob(part.data), char => char.charCodeAt(0))
-        return attachments.saveImage({
-          data,
-          mediaType: part.mediaType,
-          ...(part.name === undefined ? {} : { name: part.name }),
-        })
-      }))
-      const descriptions = await describeAttachments(deps, refs, signal)
-      if (descriptions === undefined) {
-        throw new Error('vision/transformImages: vision model call failed')
-      }
-      return { enabled: true, descriptions }
-    } catch (error) {
-      this.ctx.logger.warn('[dsh-vision-tool] transformImages failed: %s', (error as Error).message)
-      throw error
-    }
+    const patched = await declareImageInputForMainModel(this.ctx, selection.provider, selection.model)
+    return { allowed: patched, patched }
   }
 }

@@ -46,12 +46,15 @@ export async function apply(ctx: ClientContext) {
 }
 
 /**
- * 提交前图片转换（用户直传图片路径）：
- * 在 connection.api.sessions.prompt 上装一层门，把 content 里的 image parts
- * 交给宿主 vision/transformImages —— 视觉辅助开启时换成文字描述再提交，
- * 主模型（无论有无原生视觉）都能"看到"图片内容；关闭时原样透传，
- * 行为与未安装插件完全一致（无视觉模型收到图片走 DSH 默认拒绝）。
- * 转换失败（视觉模型调用出错）时把错误透传给输入框错误条。
+ * 提交前放行检查（用户直传图片路径，tool call 架构）：
+ * 在 connection.api.sessions.prompt 上装一层门 —— 当消息里带图片时，先问
+ * 宿主 vision/ensureImageAdmission 是否放行（视觉辅助开启时会给当前主模型
+ * 写 pi-ai 图片声明，让 apiproxy 门禁放行）。**content 原样提交**：图片以
+ * image block 进入会话历史/UI，pre-step 拦截器再把它替换成占位文本，
+ * 内容获取由 agent 调用 vision_analyze 工具完成 —— 与 Hermes 一致，
+ * 模型通过 tool call 决定是否、如何查看图片。
+ * 未放行时也原样提交 —— 行为与未安装插件一致（DSH 默认拒绝无视觉模型的
+ * 图片消息）。转换/放行检查失败不吞错，透传给输入框错误条。
  */
 function installPromptImageGate(inner: {
   get: (name: string) => unknown
@@ -64,26 +67,19 @@ function installPromptImageGate(inner: {
   const sessions = connection.api.sessions
   const original = sessions.prompt.bind(sessions)
   sessions.prompt = async (payload: unknown, signal?: AbortSignal) => {
-    const request = payload as { content?: { type: string; text?: string; mediaType?: string; data?: string; name?: string }[] } | undefined
-    const content = request?.content ?? []
-    const images = content.filter((part): part is { type: 'image'; mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'; data: string; name?: string } =>
-      part.type === 'image' && typeof part.mediaType === 'string' && typeof part.data === 'string')
-    if (images.length === 0) return original(payload, signal)
-    const result = await remote.vision.transformImages(
-      { images: images.map(({ mediaType, data, name }) => ({ mediaType, data, name })) },
-      signal,
-    )
-    if (!result.ok) return result
-    if (!result.value.enabled || result.value.descriptions.length === 0) {
-      return original(payload, signal)
+    const request = payload as { sessionId?: string; content?: { type: string }[] } | undefined
+    const content = request?.content
+    const hasImage = Array.isArray(content) && content.some((part) => part.type === 'image')
+    if (!hasImage) return original(payload, signal)
+    const sessionId = typeof request?.sessionId === 'string' ? request.sessionId : undefined
+    if (sessionId !== undefined) {
+      const result = await remote.vision.ensureImageAdmission({ sessionId }, signal)
+      if (!result.ok) {
+        inner.logger.warn('[dsh-vision-tool] ensureImageAdmission failed: %s', String(result.error))
+      }
     }
-    let imageIndex = 0
-    const newContent = content.map((part) => {
-      if (part.type !== 'image') return part
-      const description = result.value.descriptions[imageIndex] ?? ''
-      imageIndex += 1
-      return { type: 'text', text: `[图片 ${imageIndex} —— 视觉辅助模型描述]\n${description}` }
-    })
-    return original({ ...request, content: newContent }, signal)
+    // 无论放行与否都原样提交：放行 → 图片进消息，pre-step 替换成占位；
+    // 未放行 → DSH 默认拒绝（与原版一致）。
+    return original(payload, signal)
   }
 }

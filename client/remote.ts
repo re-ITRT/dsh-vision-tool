@@ -40,22 +40,20 @@ export const visionSaveRequestSchema = z.object({
   model: z.string().optional(),
 })
 
-export const visionImagePartSchema = z.object({
-  mediaType: z.enum(['image/png', 'image/jpeg', 'image/webp', 'image/gif']),
-  data: z.string(),
-  name: z.string().optional(),
+export const visionAdmissionRequestSchema = z.object({
+  sessionId: z.string(),
 })
 
-export const visionTransformResultSchema = z.object({
-  enabled: z.boolean(),
-  descriptions: z.array(z.string()),
+export const visionAdmissionResultSchema = z.object({
+  allowed: z.boolean(),
+  patched: z.boolean(),
 })
 
-/** describe/save/transformImages 的返回值与宿主侧一一对应。 */
+/** describe/save/ensureImageAdmission 的返回值与宿主侧一一对应。 */
 export type VisionDescribeResult = z.infer<typeof visionDescribeResultSchema>
 export type VisionSaveRequest = z.infer<typeof visionSaveRequestSchema>
-export type VisionImagePart = z.infer<typeof visionImagePartSchema>
-export type VisionTransformResult = z.infer<typeof visionTransformResultSchema>
+export type VisionAdmissionRequest = z.infer<typeof visionAdmissionRequestSchema>
+export type VisionAdmissionResult = z.infer<typeof visionAdmissionResultSchema>
 
 export const VISION_TYPERT_REMOTE: TypertRemoteContribution = {
   package: 'dsh-vision-tool',
@@ -100,10 +98,10 @@ export const VISION_TYPERT_REMOTE: TypertRemoteContribution = {
       },
     },
     {
-      id: 'dsh-vision-tool#vision/transformImages',
+      id: 'dsh-vision-tool#vision/ensureImageAdmission',
       service: 'vision',
       namespace: 'vision',
-      method: 'transformImages',
+      method: 'ensureImageAdmission',
       invocation: { kind: 'direct' },
       parameters: [
         {
@@ -112,16 +110,16 @@ export const VISION_TYPERT_REMOTE: TypertRemoteContribution = {
           source: 'json',
           codec: {
             mode: 'strict',
-            typeSymbol: 'dsh-vision-tool#vision/transformImages:request',
-            schema: z.object({ images: z.array(visionImagePartSchema) }),
+            typeSymbol: 'dsh-vision-tool#vision/ensureImageAdmission:request',
+            schema: visionAdmissionRequestSchema,
           },
         },
       ],
       cancellation: { parameter: 'signal' },
       result: {
         mode: 'strict',
-        typeSymbol: 'dsh-vision-tool#vision/transformImages:result',
-        schema: visionTransformResultSchema,
+        typeSymbol: 'dsh-vision-tool#vision/ensureImageAdmission:result',
+        schema: visionAdmissionResultSchema,
       },
     },
   ],
@@ -131,19 +129,19 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
   interface TypertRemoteMap {
     'vision/describe': (signal?: AbortSignal) => Promise<RemoteResult<VisionDescribeResult>>
     'vision/save': (request: VisionSaveRequest, signal?: AbortSignal) => Promise<RemoteResult<VisionDescribeResult>>
-    'vision/transformImages': (
-      request: { images: VisionImagePart[] },
+    'vision/ensureImageAdmission': (
+      request: VisionAdmissionRequest,
       signal?: AbortSignal,
-    ) => Promise<RemoteResult<VisionTransformResult>>
+    ) => Promise<RemoteResult<VisionAdmissionResult>>
   }
   interface TypertRemoteNamespaceMap {
     vision: {
       describe: (signal?: AbortSignal) => Promise<RemoteResult<VisionDescribeResult>>
       save: (request: VisionSaveRequest, signal?: AbortSignal) => Promise<RemoteResult<VisionDescribeResult>>
-      transformImages: (
-        request: { images: VisionImagePart[] },
+      ensureImageAdmission: (
+        request: VisionAdmissionRequest,
         signal?: AbortSignal,
-      ) => Promise<RemoteResult<VisionTransformResult>>
+      ) => Promise<RemoteResult<VisionAdmissionResult>>
     }
   }
 }

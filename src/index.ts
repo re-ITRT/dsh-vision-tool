@@ -29,8 +29,9 @@ const GUIDANCE_SECTION = [
   'a concrete question. Prefer calling it once per image; use the region parameter to zoom',
   'into small details instead of re-loading the whole image.',
   '',
-  'Images the user attaches directly to a message are described for you by the vision model',
-  'before they reach your context, so you can answer image questions even without native vision.',
+  'Images the user attaches directly to a message appear as a short placeholder in your context',
+  'with an attachment://<id> reference — call ' + TOOL_NAME + ' with that reference to get the image',
+  'content into your context.',
 ].join('\n')
 
 export function apply(ctx: Context, config: Config) {

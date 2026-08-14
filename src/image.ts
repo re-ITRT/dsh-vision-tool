@@ -68,6 +68,27 @@ export async function loadImage(
   if (!meta.width || !meta.height) {
     throw new Error('vision_analyze: cannot decode image dimensions')
   }
+  return {
+    ...(await processImage(buffer, meta.format, region, options)),
+    name,
+  }
+}
+
+/**
+ * 对已解码的图片字节应用 region 裁剪（先裁剪后缩小，坐标 clamp 到原图边界）
+ * 与 maxDimension 等比缩小，再按格式家族重新编码。供 loadImage 与附件
+ * 引用（attachment://）路径共用。
+ */
+export async function processImage(
+  buffer: Buffer,
+  format: string | undefined,
+  region: number[] | undefined,
+  options: ImagePipelineOptions,
+): Promise<Omit<LoadedImage, 'name'>> {
+  const meta = await sharp(buffer, { failOn: 'none' }).metadata()
+  if (!meta.width || !meta.height) {
+    throw new Error('vision_analyze: cannot decode image dimensions')
+  }
 
   let pipeline: ReturnType<typeof sharp> = sharp(buffer, { failOn: 'none' })
   let outWidth = meta.width
@@ -105,7 +126,6 @@ export async function loadImage(
   }
 
   // 编码：保持原格式家族；gif 等其它格式统一转 png
-  const format = meta.format
   let mediaType: LoadedMediaType
   if (format === 'jpeg') {
     mediaType = 'image/jpeg'
@@ -125,7 +145,6 @@ export async function loadImage(
     mediaType,
     width: outMeta.width ?? outWidth,
     height: outMeta.height ?? outHeight,
-    name,
   }
 }
 
