@@ -50,9 +50,11 @@ export function imageGuidanceMessage(
   workspaceRelPath: string | undefined,
 ): UserMessage {
   const label = total > 1 ? `图片 ${index}/${total}` : '一张图片'
+  // workspaceRelPath 已是 "attachments/<file>" 形式（正斜杠），直接使用；
+  // 无工作区路径时退回 attachment:// 引用
   const filePart = workspaceRelPath === undefined
     ? `attachment://${ref.attachmentId}`
-    : `attachments/${workspaceRelPath}`
+    : workspaceRelPath
   const question = '如需查看图片内容，请调用 vision_analyze 工具，image_url 参数传 "' + filePart + '"'
   return {
     role: 'user',
@@ -86,7 +88,8 @@ async function persistToWorkspace(
     await mkdir(dir, { recursive: true })
     const fileName = attachFileName(ref)
     await writeFile(join(dir, fileName), Buffer.from(stored.data))
-    return join(ATTACH_DIR, fileName)
+    // 正斜杠相对路径（Windows join 会产生反斜杠，agent 解析不可靠）
+    return `${ATTACH_DIR}/${fileName}`
   } catch (error) {
     deps.ctx.logger.warn('[dsh-vision-tool] failed to persist image to workspace: %s', (error as Error).message)
     return undefined
