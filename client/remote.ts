@@ -49,11 +49,26 @@ export const visionAdmissionResultSchema = z.object({
   patched: z.boolean(),
 })
 
-/** describe/save/ensureImageAdmission 的返回值与宿主侧一一对应。 */
+export const visionPersistFileRequestSchema = z.object({
+  sessionId: z.string(),
+  name: z.string(),
+  mediaType: z.string(),
+  data: z.string(),
+})
+
+export const visionPersistFileResultSchema = z.object({
+  relPath: z.string(),
+  size: z.number(),
+  enabled: z.boolean(),
+})
+
+/** describe/save/ensureImageAdmission/persistFile 的返回值与宿主侧一一对应。 */
 export type VisionDescribeResult = z.infer<typeof visionDescribeResultSchema>
 export type VisionSaveRequest = z.infer<typeof visionSaveRequestSchema>
 export type VisionAdmissionRequest = z.infer<typeof visionAdmissionRequestSchema>
 export type VisionAdmissionResult = z.infer<typeof visionAdmissionResultSchema>
+export type VisionPersistFileRequest = z.infer<typeof visionPersistFileRequestSchema>
+export type VisionPersistFileResult = z.infer<typeof visionPersistFileResultSchema>
 
 export const VISION_TYPERT_REMOTE: TypertRemoteContribution = {
   package: 'dsh-vision-tool',
@@ -98,6 +113,31 @@ export const VISION_TYPERT_REMOTE: TypertRemoteContribution = {
       },
     },
     {
+      id: 'dsh-vision-tool#vision/persistFile',
+      service: 'vision',
+      namespace: 'vision',
+      method: 'persistFile',
+      invocation: { kind: 'direct' },
+      parameters: [
+        {
+          name: 'request',
+          wire: 'request',
+          source: 'json',
+          codec: {
+            mode: 'strict',
+            typeSymbol: 'dsh-vision-tool#vision/persistFile:request',
+            schema: visionPersistFileRequestSchema,
+          },
+        },
+      ],
+      cancellation: { parameter: 'signal' },
+      result: {
+        mode: 'strict',
+        typeSymbol: 'dsh-vision-tool#vision/persistFile:result',
+        schema: visionPersistFileResultSchema,
+      },
+    },
+    {
       id: 'dsh-vision-tool#vision/ensureImageAdmission',
       service: 'vision',
       namespace: 'vision',
@@ -138,10 +178,14 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     vision: {
       describe: (signal?: AbortSignal) => Promise<RemoteResult<VisionDescribeResult>>
       save: (request: VisionSaveRequest, signal?: AbortSignal) => Promise<RemoteResult<VisionDescribeResult>>
-      ensureImageAdmission: (
+      ensureImageAdmission(
         request: VisionAdmissionRequest,
         signal?: AbortSignal,
-      ) => Promise<RemoteResult<VisionAdmissionResult>>
+      ): Promise<RemoteResult<VisionAdmissionResult>>
+      persistFile(
+        request: VisionPersistFileRequest,
+        signal?: AbortSignal,
+      ): Promise<RemoteResult<VisionPersistFileResult>>
     }
   }
 }

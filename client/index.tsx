@@ -20,6 +20,68 @@ import { VisionPageStore } from './store.js'
 import { VisionSection, type VisionSectionInjected } from './VisionSection.js'
 
 /** 客户端 Cordis 注入的服务。 */
+/**
+ * 其他格式上传通道（drop 附件式）：
+ * DSH 原生只收图片 drop（addImages）。本钩子捕获 document 级 drop 里的
+ * **非图片文件**（zip/pdf/txt/py...），交给宿主 vision/persistFile 写入
+ * 工作区 attachments/（像 zip 下载一样成为普通文件），然后把引用文本
+ * 注入输入框末尾 —— 视觉辅助开启时给完整指引，关闭时仅给路径引用。
+ * 图片文件留给 DSH 原生流程（addImages / pre-step 拆分）。
+ */
+function installFileDrop(inner: {
+  remote: TypertClientRemote
+  logger: { warn(...args: unknown[]): void }
+}): () => void {
+  const onDrop = (event: DragEvent): void => {
+    const files = Array.from(event.dataTransfer?.files ?? [])
+    const nonImages = files.filter((file) => !file.type.startsWith('image/'))
+    if (nonImages.length === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    void (async () => {
+      for (const file of nonImages) {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '')
+          reader.onerror = () => reject(reader.error)
+          reader.readAsDataURL(file)
+        })
+        const result = await inner.remote.vision.persistFile(
+          { sessionId: '', name: file.name, mediaType: file.type || 'application/octet-stream', data },
+          undefined,
+        )
+        if (!result.ok) {
+          inner.logger.warn('[dsh-vision-tool] persistFile failed: %s', String(result.error))
+          return
+        }
+        const { relPath, size, enabled } = result.value
+        const sizeText = size >= 1024 * 1024
+          ? (size / 1024 / 1024).toFixed(1) + ' MiB'
+          : size >= 1024 ? Math.round(size / 1024) + ' KiB' : size + ' B'
+        const text = enabled
+          ? `[用户上传了文件：${relPath}（${sizeText}）。可用文件工具查看/解压处理]`
+          : `attachments/${relPath}`
+        appendToComposer('\n' + text)
+      }
+    })().catch((error: unknown) => {
+      inner.logger.warn('[dsh-vision-tool] file drop handling failed: %s', (error as Error).message)
+    })
+  }
+  document.addEventListener('drop', onDrop, true)
+  return () => document.removeEventListener('drop', onDrop, true)
+}
+
+/** 向当前输入框末尾追加文本（原生 setter 触发 React 受控更新）。 */
+function appendToComposer(text: string): void {
+  const textarea = document.querySelector<HTMLTextAreaElement>('textarea[placeholder]')
+  if (!textarea) return
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+  if (!setter) return
+  setter.call(textarea, textarea.value + text)
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  textarea.focus()
+}
+
 export const inject = ['remote']
 
 export async function apply(ctx: ClientContext) {
@@ -32,6 +94,8 @@ export async function apply(ctx: ClientContext) {
     inject: ['slots', 'remote', 'remote.vision', 'connection'],
     apply(inner) {
       installPromptImageGate(inner)
+      const disposeFileDrop = installFileDrop(inner)
+      inner.effect(() => () => disposeFileDrop())
       const store = new VisionPageStore(inner.remote)
       const injected = (): VisionSectionInjected => ({ store })
       inner.slots.inject('settings.section', () => inner.slots.register({

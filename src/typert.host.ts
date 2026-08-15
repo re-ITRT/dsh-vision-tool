@@ -54,6 +54,19 @@ export const visionAdmissionResultSchema = z.object({
   patched: z.boolean(),
 })
 
+export const visionPersistFileRequestSchema = z.object({
+  sessionId: z.string(),
+  name: z.string(),
+  mediaType: z.string(),
+  data: z.string(),
+})
+
+export const visionPersistFileResultSchema = z.object({
+  relPath: z.string(),
+  size: z.number(),
+  enabled: z.boolean(),
+})
+
 export const TYPERT = {
   package: 'dsh-vision-tool',
   face: 'host' as const,
@@ -101,6 +114,31 @@ export const TYPERT = {
         mode: 'strict' as const,
         typeSymbol: 'dsh-vision-tool#vision/save:result',
         schema: visionDescribeResultSchema,
+      },
+    },
+    {
+      id: 'dsh-vision-tool#vision/persistFile',
+      service: 'vision',
+      namespace: 'vision',
+      method: 'persistFile',
+      invocation: { kind: 'direct' as const },
+      parameters: [
+        {
+          name: 'request',
+          wire: 'request',
+          source: 'json' as const,
+          codec: {
+            mode: 'strict' as const,
+            typeSymbol: 'dsh-vision-tool#vision/persistFile:request',
+            schema: visionPersistFileRequestSchema,
+          },
+        },
+      ],
+      cancellation: { parameter: 'signal' as const },
+      result: {
+        mode: 'strict' as const,
+        typeSymbol: 'dsh-vision-tool#vision/persistFile:result',
+        schema: visionPersistFileResultSchema,
       },
     },
     {

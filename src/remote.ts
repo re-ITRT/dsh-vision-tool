@@ -43,6 +43,8 @@ export interface VisionSaveRequest {
   model?: string
 }
 
+/** 最近活跃的会话 id（由 agent/inbox/inserted 事件更新，供 persistFile 兜底）。 */
+
 /** ensureImageAdmission 的输入：提交图片消息的会话。 */
 export interface VisionAdmissionRequest {
   sessionId: string
@@ -58,6 +60,22 @@ export interface VisionAdmissionResult {
   allowed: boolean
   /** 是否实际为主模型写了图片声明（非 pi-ai 路由时为 false）。 */
   patched: boolean
+}
+
+/** persistFile 的输入：浏览器提交前的一个非图片文件（base64 直传）。 */
+export interface VisionPersistFileRequest {
+  sessionId: string
+  name: string
+  mediaType: string
+  /** 文件字节（base64 编码，≤ 20 MiB）。 */
+  data: string
+}
+
+/** persistFile 的结果：工作区相对路径 + 大小 + 视觉辅助开关状态。 */
+export interface VisionPersistFileResult {
+  relPath: string
+  size: number
+  enabled: boolean
 }
 
 /** Remote 服务的插件配置：设置命名空间 + 提示词模板（供 transformImages 复用）。 */
@@ -206,5 +224,49 @@ export class VisionRemoteService extends TypertRemoteService {
     }
     const patched = await declareImageInputForMainModel(this.ctx, selection.provider, selection.model)
     return { allowed: patched, patched }
+  }
+
+  /**
+   * 非图片文件持久化（其他格式上传通道）：
+   * 浏览器把文件字节（base64）交给宿主，写入会话工作区的 attachments/ 目录
+   * （像 zip 下载一样作为普通文件存在），返回工作区相对路径与大小。
+   * 不生成任何指引 —— 是否/如何告诉 agent 由调用方（client）按开关状态决定。
+   * 大小上限 20 MiB（与 DSH 图片上限同量级）。
+   */
+  @Remote
+  async persistFile(request: VisionPersistFileRequest, signal: AbortSignal): Promise<VisionPersistFileResult> {
+    const MAX_BYTES = 20 * 1024 * 1024
+    if (typeof request?.name !== 'string' || request.name.trim().length === 0
+      || request.name.includes('/') || request.name.includes('\\') || request.name.includes('..')) {
+      throw new Error('vision/persistFile: name must be a plain file name')
+    }
+    const buffer = Buffer.from(String(request?.data ?? ''), 'base64')
+    if (buffer.byteLength === 0 || buffer.byteLength > MAX_BYTES) {
+      throw new Error(`vision/persistFile: file must be 1..${MAX_BYTES} bytes`)
+    }
+    const { createHash } = await import('node:crypto')
+    const { mkdir, writeFile } = await import('node:fs/promises')
+    const { join } = await import('node:path')
+    const agents = this.ctx.get('agents')
+    let sessionId = (typeof request?.sessionId === 'string' && request.sessionId.length > 0)
+      ? request.sessionId
+      : undefined
+    if (sessionId === undefined) {
+      // 兜底：最近注册的活跃 agent（client 拿不到当前会话 id 时）
+      const last = agents?.list?.()?.at(-1)
+      sessionId = (last as unknown as { id?: string } | undefined)?.id
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- branded SessionId 与 wire 字符串互转
+    const agent = agents?.get(sessionId as any)
+    const cwd = agent?.session?.header?.cwd
+    if (typeof cwd !== 'string' || cwd.length === 0) {
+      throw new Error('vision/persistFile: session has no workspace cwd')
+    }
+    signal.throwIfAborted()
+    const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 8)
+    const relPath = `attachments/${hash}_${request.name}`
+    await mkdir(join(cwd, 'attachments'), { recursive: true })
+    await writeFile(join(cwd, ...relPath.split('/')), buffer)
+    return { relPath, size: buffer.byteLength, enabled: isVisionConfigured(this.resolve()) }
   }
 }
